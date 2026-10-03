@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iOS Test Harness</title>
+<style>
+  body { font: 14px ui-monospace, Menlo, monospace; background: #111; color: #eee; padding: 16px; line-height: 1.5; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  h2 { font-size: 14px; color: #6cf; margin: 20px 0 6px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+  .ok { color: #6f6; }
+  .no { color: #f66; }
+  .warn { color: #fc6; }
+  .kv { padding-left: 16px; }
+  button { background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 8px 14px; font: inherit; border-radius: 6px; margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>iOS Test Harness — Phase 1</h1>
+<div id="out"></div>
+<button onclick="location.reload()">Re-run</button>
+<script>
+const out = document.getElementById('out');
+function sec(t) { out.insertAdjacentHTML('beforeend', '<h2>' + t + '</h2>'); }
+function kv(k, v, cls) { out.insertAdjacentHTML('beforeend', '<div class="kv"><span class="' + (cls||'') + '">' + k + ':</span> ' + v + '</div>'); }
+
+sec('Device');
+kv('userAgent', navigator.userAgent);
+kv('platform', navigator.platform);
+kv('hardwareConcurrency', navigator.hardwareConcurrency);
+kv('maxTouchPoints', navigator.maxTouchPoints);
+kv('language', navigator.language);
+kv('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+const ua = navigator.userAgent;
+const ios = ua.match(/OS (\d+)_(\d+)(?:_(\d+))?/);
+if (ios) kv('iOS version', ios[1] + '.' + ios[2] + (ios[3] ? '.' + ios[3] : ''), 'ok');
+const wk = ua.match(/AppleWebKit\/(\d+\.\d+)/);
+if (wk) kv('WebKit', wk[1]);
+
+sec('JS engine');
+kv('WebAssembly', typeof WebAssembly !== 'undefined' ? 'yes' : 'no', typeof WebAssembly !== 'undefined' ? 'ok' : 'no');
+kv('BigInt', typeof BigInt !== 'undefined' ? 'yes' : 'no');
+kv('WeakRef', typeof WeakRef !== 'undefined' ? 'yes' : 'no');
+kv('SharedArrayBuffer', typeof SharedArrayBuffer !== 'undefined' ? 'yes' : 'no');
+kv('Atomics', typeof Atomics !== 'undefined' ? 'yes' : 'no');
+
+const t0 = performance.now();
+let x = 0;
+for (let i = 0; i < 5000000; i++) x = (x + i) | 0;
+const jms = performance.now() - t0;
+kv('5M-loop time (ms)', jms.toFixed(1));
+kv('JIT likely active', jms < 100 ? 'yes (fast)' : jms < 500 ? 'partial' : 'no / throttled',
+   jms < 100 ? 'ok' : 'warn');
+
+sec('WebGL');
+const canvas = document.createElement('canvas');
+const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+kv('WebGL1', gl ? 'yes' : 'no', gl ? 'ok' : 'no');
+if (gl) {
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  kv('vendor', gl.getParameter(gl.VENDOR));
+  kv('renderer', gl.getParameter(gl.RENDERER));
+  if (dbg) kv('unmasked', gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
+  kv('maxTextureSize', gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  const exts = gl.getSupportedExtensions() || [];
+  kv('extensions', exts.length);
+  kv('OES_texture_float', exts.includes('OES_texture_float') ? 'yes' : 'no');
+}
+const gl2 = document.createElement('canvas').getContext('webgl2');
+kv('WebGL2', gl2 ? 'yes' : 'no', gl2 ? 'ok' : 'warn');
+
+sec('Alternate pivots');
+kv('AudioContext', typeof AudioContext !== 'undefined' || typeof webkitAudioContext !== 'undefined' ? 'yes' : 'no');
+kv('RTCPeerConnection', typeof RTCPeerConnection !== 'undefined' ? 'yes' : 'no');
+kv('MediaSource', typeof MediaSource !== 'undefined' ? 'yes' : 'no');
+kv('VideoDecoder', typeof VideoDecoder !== 'undefined' ? 'yes' : 'no');
+kv('OffscreenCanvas', typeof OffscreenCanvas !== 'undefined' ? 'yes' : 'no');
+
+sec('Storage');
+kv('localStorage', (function(){ try { localStorage.setItem('t','1'); localStorage.removeItem('t'); return 'yes'; } catch(e){ return 'no'; } })());
+kv('IndexedDB', typeof indexedDB !== 'undefined' ? 'yes' : 'no');
+
+sec('Context');
+kv('isSecureContext', window.isSecureContext ? 'yes' : 'no');
+kv('crossOriginIsolated', window.crossOriginIsolated ? 'yes' : 'no');
+kv('origin', location.origin);
+
+const f = document.createElement('iframe');
+f.src = 'js/frame-test.html';
+f.style.cssText = 'width:1px;height:1px;position:absolute;left:-9999px;';
+document.body.appendChild(f);
+kv('1x1 iframe', 'inserted');
+</script>
+</body>
+</html>

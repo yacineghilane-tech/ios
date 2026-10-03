@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Timing</title>
+<style>
+  body{font:13px ui-monospace;background:#111;color:#eee;padding:16px}
+  .ok{color:#6f6}.no{color:#f66}.warn{color:#fc6}
+  h2{font-size:14px;color:#6cf;margin:16px 0 6px;border-bottom:1px solid #333}
+</style></head>
+<body><h1>Timing precision</h1><div id="out"></div>
+<script>
+var out = document.getElementById('out');
+function sec(t){out.insertAdjacentHTML('beforeend','<h2>'+t+'</h2>');}
+function kv(k,v,c){out.insertAdjacentHTML('beforeend','<div><span class="'+(c||'')+'">'+k+':</span> '+v+'</div>');}
+
+sec('performance.now()');
+var samples = [];
+for (var i = 0; i < 100000; i++) {
+  var a = performance.now();
+  var b = performance.now();
+  if (b > a) samples.push(b - a);
+}
+samples.sort(function(x,y){ return x - y; });
+kv('median delta (ms)', samples[Math.floor(samples.length/2)].toFixed(6));
+kv('min delta (ms)', samples[0].toFixed(6), samples[0] > 0.0001 ? 'ok' : 'coarse');
+kv('resolution', samples[0] < 0.001 ? 'high (<1 us)' : samples[0] < 0.05 ? 'medium' : 'coarse',
+   samples[0] < 0.05 ? 'ok' : 'warn');
+
+sec('Hot-loop stability');
+function run() {
+  var s = 0;
+  for (var i = 0; i < 100000; i++) s += i * i;
+  return s;
+}
+for (var i = 0; i < 1000; i++) run();
+var times = [];
+for (var i = 0; i < 100; i++) {
+  var t = performance.now();
+  run();
+  times.push(performance.now() - t);
+}
+times.sort(function(a,b){ return a-b; });
+kv('median (ms)', times[50].toFixed(3));
+kv('min (ms)', times[0].toFixed(3));
+kv('max (ms)', times[99].toFixed(3));
+var ratio = times[99] / times[0];
+kv('max/min ratio', ratio.toFixed(2), ratio < 3 ? 'ok (stable)' : 'noisy');
+</script></body></html>

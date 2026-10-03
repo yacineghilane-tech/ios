@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>WebGL pivot</title>
+<style>
+  body{font:13px ui-monospace;background:#111;color:#eee;padding:16px}
+  .ok{color:#6f6}.no{color:#f66}.warn{color:#fc6}
+  h2{font-size:14px;color:#6cf;margin:16px 0 6px;border-bottom:1px solid #333}
+</style></head>
+<body><h1>WebGL / GPU pivot test</h1><div id="out"></div>
+<script>
+var out = document.getElementById('out');
+function sec(t){out.insertAdjacentHTML('beforeend','<h2>'+t+'</h2>');}
+function kv(k,v,c){out.insertAdjacentHTML('beforeend','<div><span class="'+(c||'')+'">'+k+':</span> '+v+'</div>');}
+
+sec('WebGL1 context');
+var canvas = document.createElement('canvas');
+canvas.width = 256; canvas.height = 256;
+var gl = canvas.getContext('webgl', { antialias: false });
+if (!gl) { kv('context', 'failed', 'no'); }
+else {
+  kv('context created', 'yes', 'ok');
+  var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  if (dbg) {
+    kv('UNMASKED_VENDOR', gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL));
+    kv('UNMASKED_RENDERER', gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
+  }
+  var exts = gl.getSupportedExtensions() || [];
+  kv('extensions', exts.length);
+  ['OES_texture_float','OES_texture_half_float','WEBGL_draw_buffers',
+   'EXT_color_buffer_float','WEBGL_debug_shaders','EXT_disjoint_timer_query',
+   'WEBGL_compressed_texture_astc','WEBGL_compressed_texture_etc'].forEach(function(e){
+    kv('ext:'+e, exts.indexOf(e) >= 0 ? 'yes' : 'no', exts.indexOf(e) >= 0 ? 'ok' : '');
+  });
+
+  sec('Shader compile');
+  var vs = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(vs, 'attribute vec2 p; void main(){ gl_Position = vec4(p,0.,1.); }');
+  gl.compileShader(vs);
+  kv('vertex shader', gl.getShaderParameter(vs, gl.COMPILE_STATUS) ? 'ok' : 'fail',
+     gl.getShaderParameter(vs, gl.COMPILE_STATUS) ? 'ok' : 'no');
+
+  sec('Texture alloc');
+  var tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 2048, 2048, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  kv('2K RGBA texture', gl.getError() === 0 ? 'ok' : 'error', gl.getError() === 0 ? 'ok' : 'warn');
+  kv('MAX_TEXTURE_SIZE', gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  kv('MAX_RENDERBUFFER_SIZE', gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+
+  sec('Float textures');
+  if (exts.indexOf('OES_texture_float') >= 0) {
+    var ftex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, ftex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 256, 0, gl.RGBA, gl.FLOAT, null);
+    kv('256x256 float texture', gl.getError() === 0 ? 'ok' : 'error',
+       gl.getError() === 0 ? 'ok' : 'no');
+  }
+}
+
+sec('WebGL2');
+var gl2 = document.createElement('canvas').getContext('webgl2');
+kv('webgl2 context', gl2 ? 'yes' : 'no', gl2 ? 'ok' : 'warn');
+if (gl2) {
+  kv('MAX_TEXTURE_SIZE (gl2)', gl2.getParameter(gl2.MAX_TEXTURE_SIZE));
+  kv('MAX_ARRAY_TEXTURE_LAYERS', gl2.getParameter(gl2.MAX_ARRAY_TEXTURE_LAYERS));
+}
+</script></body></html>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>JIT primitives</title>
+<style>
+  body { font: 14px ui-monospace; background:#111; color:#eee; padding:16px; line-height:1.5;}
+  h2 { font-size:14px; color:#6cf; margin:16px 0 6px; border-bottom:1px solid #333;}
+  .ok{color:#6f6;} .no{color:#f66;} .warn{color:#fc6;}
+</style>
+</head>
+<body>
+<h1>JIT / JS engine primitives</h1>
+<div id="out"></div>
+<script>
+const out = document.getElementById('out');
+function sec(t){out.insertAdjacentHTML('beforeend','<h2>'+t+'</h2>');}
+function kv(k,v,c){out.insertAdjacentHTML('beforeend','<div><span class="'+(c||'')+'">'+k+':</span> '+v+'</div>');}
+
+sec('Typed array spray');
+const t0 = performance.now();
+const arr = [];
+for (let i = 0; i < 10000; i++) arr.push(new Float64Array(64));
+const sp = performance.now() - t0;
+kv('10k Float64Array allocations', sp.toFixed(1) + ' ms', sp < 200 ? 'ok' : 'warn');
+
+sec('Overlapping views');
+const buf = new ArrayBuffer(1024);
+const f64 = new Float64Array(buf);
+const u32 = new Uint32Array(buf);
+const u8  = new Uint8Array(buf);
+f64[0] = 1.5;
+kv('f64[0]=1.5 -> u32[0]', u32[0].toString(16), 'ok');
+kv('f64[0]=1.5 -> u32[1]', u32[1].toString(16), 'ok');
+
+sec('Bounds checks');
+const testArr = new Float64Array(1000);
+for (let i = 0; i < 1e5; i++) testArr[i % 1000];
+try {
+  const v = testArr[5000];
+  kv('out-of-bounds read', 'returned ' + v + ' (!)', 'no');
+} catch (e) {
+  kv('out-of-bounds read', 'threw ' + e.constructor.name, 'ok');
+}
+
+sec('WebAssembly');
+if (typeof WebAssembly !== 'undefined') {
+  const wasmBytes = new Uint8Array([
+    0x00,0x61,0x73,0x6d, 0x01,0x00,0x00,0x00,
+    0x01,0x05,0x01,0x60,0x00,0x01,0x7f,
+    0x03,0x02,0x01,0x00,
+    0x07,0x08,0x01,0x04,0x74,0x65,0x73,0x74,0x00,0x00,
+    0x0a,0x06,0x01,0x04,0x00,0x41,0x2a,0x0b
+  ]);
+  WebAssembly.instantiate(wasmBytes).then(function(r){
+    var v = r.instance.exports.test();
+    kv('wasm instantiate', v === 42 ? 'ok (42)' : 'unexpected ' + v, v === 42 ? 'ok' : 'no');
+  }).catch(function(e){ kv('wasm instantiate', 'error: ' + e.message, 'no'); });
+}
+</script>
+</body></html>

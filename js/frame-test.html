@@ -1,0 +1,6 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>frame-test</title></head>
+<body><script>
+console.log('[frame-test] loaded');
+parent.postMessage({type:'frame-ok', ua: navigator.userAgent}, '*');
+</script></body></html>
