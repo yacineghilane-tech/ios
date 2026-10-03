@@ -36,16 +36,18 @@
     border-radius: 6px; padding: 12px 13px; margin-bottom: 12px;
     font-size: 13px; font-weight: 600;
     border: 1px solid #1c1c1c; background: #111;
+    white-space: pre-wrap;
   }
   .verdict.pending { color: #888; }
   .verdict.vulnerable { color: #4ade80; background: #0d1a12; border-color: #1a3d28; }
   .verdict.patched { color: #f87171; background: #1a0d0d; border-color: #3d1a1a; }
   .verdict.unknown { color: #fbbf24; background: #1a160d; border-color: #3d311a; }
+  .verdict.inconclusive { color: #94a3b8; background: #10141a; border-color: #1e2733; }
   #log {
     background: #0d0d0d; border: 1px solid #1a1a1a;
     border-radius: 6px; padding: 10px 11px;
     font-size: 11px; line-height: 1.7;
-    max-height: 60vh; overflow-y: auto;
+    max-height: 55vh; overflow-y: auto;
     white-space: pre-wrap; word-break: break-all;
     -webkit-overflow-scrolling: touch;
   }
@@ -57,6 +59,7 @@
   .tag-WARN { color: #fbbf24; }
   .tag-STEP { color: #c084fc; font-weight: 600; }
   .tag-EXPLOIT { color: #f472b6; font-weight: 700; }
+  .tag-NOTE { color: #94a3b8; font-style: italic; }
   .msg { color: #b8b8b8; }
   #actions { display: flex; gap: 8px; margin-top: 12px; }
   button {
@@ -82,6 +85,7 @@
   .stage-row.running .status { color: #60a5fa; }
   .stage-row.ok .status { color: #4ade80; }
   .stage-row.fail .status { color: #f87171; }
+  .stage-row.stub .status { color: #94a3b8; }
   details { margin-top: 12px; }
   summary { font-size: 11px; color: #666; cursor: pointer; padding: 6px 0; }
   details[open] summary { color: #999; }
@@ -89,6 +93,11 @@
     margin-top: 8px; padding: 9px 10px;
     background: #0d0d0d; border: 1px solid #1a1a1a; border-radius: 5px;
     font-size: 10px; color: #777; word-break: break-all; line-height: 1.5;
+  }
+  #notice {
+    background: #1a160d; border: 1px solid #3d311a; color: #fbbf24;
+    border-radius: 6px; padding: 10px 11px; margin-bottom: 12px;
+    font-size: 11px; line-height: 1.55;
   }
 </style>
 </head>
@@ -98,6 +107,13 @@
     <h1>Security Test</h1>
     <div id="clock">--</div>
   </header>
+
+  <div id="notice">
+    Scaffold only. No real exploit payload is loaded. Every stage below is a
+    placeholder — the verdict is <b>INCONCLUSIVE</b> unless a real side effect
+    (worker crash, Safari termination, race failure) is observed. Paste the
+    leaked payloads into the marked regions to make this test meaningful.
+  </div>
 
   <div class="verdict pending" id="verdict">Initializing…</div>
 
@@ -151,6 +167,15 @@
   var verdictEl = document.getElementById('verdict');
   var stageListEl = document.getElementById('stage-list');
   var running = false;
+
+  /* Track observable side effects. A clean run-through with no side
+   * effect is INCONCLUSIVE, never "VULNERABLE". */
+  var evidence = {
+    workerError: null,       // { stage, msg } — real crash inside a primitive
+    workerTimeout: null,     // { stage } — hang consistent with memory corruption
+    safariTerminated: false, // detected via onpagehide + no visibility change
+    stageFailures: []        // list of stage ids that threw
+  };
 
   var STAGES = [
     { id: 'fingerprint',  name: 'Fingerprint (informational)' },
@@ -221,6 +246,7 @@
     if (running) return;
     logEl.innerHTML = '';
     startTime = Date.now();
+    evidence = { workerError: null, workerTimeout: null, safariTerminated: false, stageFailures: [] };
     STAGES.forEach(function (s) { setStage(s.id, 'pending'); });
     setVerdict('Ready', 'pending');
   });
@@ -266,7 +292,9 @@
    * WORKER SOURCE STRINGS
    *
    * Blob-based workers so the tester stays in one file. Paste the
-   * real leaked payload into the marked "PAYLOAD" regions.
+   * real leaked payload into the marked "PAYLOAD" regions. Until
+   * then, every worker is a no-op that reports the stage names and
+   * resolves — so the harness knows it ran, not that it exploited.
    * ============================================================ */
 
   var WORKER_RCE_184 = String.raw`
@@ -283,17 +311,17 @@ self.onmessage = function (e) {
     /* ============================================================
      * PAYLOAD — paste the leaked DarkSword rce_worker.js body here.
      *
-     * The leaked payload exposes these steps internally:
+     * Expected internal steps:
      *   1. BigInt.prototype.noPAC() / asInt32s()
      *   2. JIT heap grooming  (Float64Array + Shape allocation)
      *   3. Type confusion trigger for CVE-2025-31277
      *   4. addrof / fakeobj primitives
      *   5. Arbitrary read/write engine
      *   6. PAC bypass via dyld interposing (CVE-2026-20700)
-     *   7. JOP thread setup + dlopen("libsystem_kernel.dylib")
+     *   7. JOP thread setup + dlopen
      *
-     * If the build is patched, the first failing step throws and the
-     * catch below reports the exact stage.
+     * A real run on a vulnerable device takes SECONDS, not ms.
+     * A real run on a patched device throws at the failing step.
      * ============================================================ */
 
     post('stage', { name: 'JIT heap grooming' });
@@ -303,7 +331,7 @@ self.onmessage = function (e) {
     post('stage', { name: 'PAC bypass (dyld interpose)' });
     post('stage', { name: 'JOP thread + dlopen' });
 
-    post('done', { note: 'RCE stage complete (18.4/18.5)' });
+    post('done', { note: 'SCAFFOLD (18.4/18.5) — no payload loaded', stub: true });
 
   } catch (err) {
     post('error', { msg: String(err && err.message || err), stage: 'rce_184' });
@@ -328,6 +356,9 @@ self.onmessage = function (e) {
      * CVE-2025-43529: UAF in the DFG JIT string-concat fast path,
      * reachable via stale GC roots. Different heap groom than 18.4;
      * PAC bypass is identical (same dyld primitive).
+     *
+     * Scaffold below just walks stage names — it does not groom,
+     * confuse, or bypass anything.
      * ============================================================ */
 
     post('stage', { name: 'DFG JIT warmup' });
@@ -337,7 +368,7 @@ self.onmessage = function (e) {
     post('stage', { name: 'PAC bypass (dyld interpose)' });
     post('stage', { name: 'JOP thread + dlopen' });
 
-    post('done', { note: 'RCE stage complete (18.6+)' });
+    post('done', { note: 'SCAFFOLD (18.6+) — no payload loaded', stub: true });
 
   } catch (err) {
     post('error', { msg: String(err && err.message || err), stage: 'rce_186' });
@@ -364,8 +395,8 @@ self.onmessage = function (e) {
       var guard = setTimeout(function () {
         if (settled) return;
         settled = true;
-        worker.terminate();
-        URL.revokeObjectURL(worker.__url);
+        try { worker.terminate(); } catch (_) {}
+        try { URL.revokeObjectURL(worker.__url); } catch (_) {}
         reject(new Error('timeout: ' + label + ' produced no callback in 45s'));
       }, 45000);
 
@@ -379,15 +410,15 @@ self.onmessage = function (e) {
           if (settled) return;
           settled = true;
           clearTimeout(guard);
-          worker.terminate();
-          URL.revokeObjectURL(worker.__url);
+          try { worker.terminate(); } catch (_) {}
+          try { URL.revokeObjectURL(worker.__url); } catch (_) {}
           reject(new Error(d.msg || 'worker error'));
         } else if (d.type === 'done') {
           if (settled) return;
           settled = true;
           clearTimeout(guard);
-          worker.terminate();
-          URL.revokeObjectURL(worker.__url);
+          try { worker.terminate(); } catch (_) {}
+          try { URL.revokeObjectURL(worker.__url); } catch (_) {}
           resolve(d);
         }
       };
@@ -419,10 +450,9 @@ self.onmessage = function (e) {
         var dbg = gl.getExtension('WEBGL_debug_renderer_info');
         var renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'unknown';
         log('ANGLE renderer: ' + renderer, 'INFO');
-        log('ANGLE OOB race window opened (CVE-2025-14174)', 'OK');
+        log('SCAFFOLD — ANGLE precondition met, no race performed', 'NOTE');
         setTimeout(function () {
-          log('GPU-process pivot reported', 'OK');
-          resolve({ ok: true });
+          resolve({ ok: true, stub: true });
         }, 400);
       } catch (e) {
         reject(e);
@@ -448,13 +478,11 @@ self.onmessage = function (e) {
         var p = v.play();
         if (p && p.catch) p.catch(function () {});
 
-        log('Media stack engaged (mediaplaybackd reachable)', 'OK');
-        log('XNU CoW race window opened (CVE-2025-43510)', 'OK');
+        log('SCAFFOLD — media stack engaged, no CoW race performed', 'NOTE');
 
         setTimeout(function () {
-          log('mediaplaybackd pivot reported', 'OK');
           try { v.pause(); v.remove(); } catch (_) {}
-          resolve({ ok: true });
+          resolve({ ok: true, stub: true });
         }, 500);
       } catch (e) {
         reject(e);
@@ -468,18 +496,17 @@ self.onmessage = function (e) {
       try {
         /* PAYLOAD — paste leaked pe_main.js body here.
          * The full payload does IOSurface alloc + TOCTOU race +
-         * ICMPv6 socket spray + KASLR defeat. */
-        log('IOSurface allocation requested (PurpleGfxMem)', 'INFO');
-        log('TOCTOU race window opened (cluster_*_contig)', 'OK');
-        log('ICMPv6 socket spray requested', 'INFO');
-        log('KASLR defeat path: socket → so_proto → pr_input', 'INFO');
+         * ICMPv6 socket spray + KASLR defeat and then RETURNS
+         * an actual kernel base address it read from memory.
+         *
+         * Scaffold below returns { stub: true } — no krw claim. */
+        log('SCAFFOLD — kernel stage reached, no race performed', 'NOTE');
 
         setTimeout(function () {
           resolve({
-            krw: true,
-            slide: '0x0',
-            base: '0xfffffff007004000',
-            note: 'stage boundary reached'
+            krw: false,
+            stub: true,
+            note: 'no payload loaded — nothing executed'
           });
         }, 700);
       } catch (e) {
@@ -496,6 +523,7 @@ self.onmessage = function (e) {
     if (running) return;
     running = true;
     startTime = Date.now();
+    evidence = { workerError: null, workerTimeout: null, safariTerminated: false, stageFailures: [] };
     document.getElementById('btn-run').disabled = true;
     document.getElementById('btn-clear').disabled = true;
     logEl.innerHTML = '';
@@ -524,46 +552,73 @@ self.onmessage = function (e) {
     var rceSrc = is184 ? WORKER_RCE_184 : WORKER_RCE_186;
     var rceLabel = is184 ? 'rce_184' : 'rce_186';
     var rceWorker = makeWorker(rceSrc, rceLabel);
+    var rceStub = false;
     try {
       var rceResult = await runWorker(rceWorker, rceLabel);
-      log('WebContent RCE reported: ' + (rceResult.note || 'ok'), 'OK');
+      rceStub = !!(rceResult && rceResult.stub);
+      log('WebContent RCE worker returned: ' + (rceResult.note || 'ok'), rceStub ? 'NOTE' : 'OK');
+      ['jit', 'confusion', 'primitives', 'rw', 'pac', 'jop'].forEach(function (id) {
+        setStage(id, 'ok');
+      });
     } catch (e) {
+      evidence.workerError = { stage: 'rce', msg: e.message };
       var order = ['jit', 'confusion', 'primitives', 'rw', 'pac', 'jop'];
       var failedAt = null;
       for (var i = 0; i < order.length; i++) {
         if (stageState[order[i]] === 'running' && !failedAt) {
           failedAt = order[i];
           setStage(order[i], 'fail');
+          evidence.stageFailures.push(order[i]);
         } else if (stageState[order[i]] === 'running') {
           setStage(order[i], 'pending');
         }
       }
-      log('RCE stage failed: ' + e.message, 'FAIL');
-      setVerdict('Chain halted at WebContent RCE — device is patched for the JIT bug', 'patched');
+      log('RCE worker failed: ' + e.message, 'FAIL');
+      setVerdict(
+        'INCONCLUSIVE — RCE worker died at ' + (failedAt || 'unknown') + '.\n' +
+        'A worker failure here is consistent with either (a) the JIT bug being patched, ' +
+        'or (b) a real memory-corruption crash. Without the real payload loaded, this is ' +
+        'a scaffold no-op and carries no signal.',
+        'inconclusive'
+      );
       return finish();
     }
 
     /* --- Stage 4: sandbox escape #1 --- */
     setStage('sbx0', 'running');
+    var sbx0Stub = false;
     try {
-      await runSbx0();
-      setStage('sbx0', 'ok');
+      var r0 = await runSbx0();
+      sbx0Stub = !!(r0 && r0.stub);
+      setStage('sbx0', sbx0Stub ? 'stub' : 'ok');
     } catch (e) {
+      evidence.stageFailures.push('sbx0');
       setStage('sbx0', 'fail');
       log('Sandbox escape #1 failed: ' + e.message, 'FAIL');
-      setVerdict('Chain halted at sandbox escape #1 (ANGLE / CVE-2025-14174)', 'patched');
+      setVerdict(
+        'INCONCLUSIVE — sandbox escape #1 did not complete.\n' +
+        'WebGL precondition failed, or the real payload is not loaded.',
+        'inconclusive'
+      );
       return finish();
     }
 
     /* --- Stage 5: sandbox escape #2 --- */
     setStage('sbx1', 'running');
+    var sbx1Stub = false;
     try {
-      await runSbx1();
-      setStage('sbx1', 'ok');
+      var r1 = await runSbx1();
+      sbx1Stub = !!(r1 && r1.stub);
+      setStage('sbx1', sbx1Stub ? 'stub' : 'ok');
     } catch (e) {
+      evidence.stageFailures.push('sbx1');
       setStage('sbx1', 'fail');
       log('Sandbox escape #2 failed: ' + e.message, 'FAIL');
-      setVerdict('Chain halted at sandbox escape #2 (XNU CoW / CVE-2025-43510)', 'patched');
+      setVerdict(
+        'INCONCLUSIVE — sandbox escape #2 did not complete.\n' +
+        'Media stack precondition failed, or the real payload is not loaded.',
+        'inconclusive'
+      );
       return finish();
     }
 
@@ -572,30 +627,51 @@ self.onmessage = function (e) {
     var peResult;
     try {
       peResult = await runPE();
-      setStage('pe', 'ok');
+      setStage('pe', peResult && peResult.stub ? 'stub' : 'ok');
     } catch (e) {
+      evidence.stageFailures.push('pe');
       setStage('pe', 'fail');
       log('Kernel priv-esc failed: ' + e.message, 'FAIL');
-      setVerdict('Chain halted at kernel priv-esc (CVE-2025-43520)', 'patched');
+      setVerdict(
+        'INCONCLUSIVE — kernel priv-esc did not complete.\n' +
+        'Race precondition failed, or the real payload is not loaded.',
+        'inconclusive'
+      );
       return finish();
     }
 
     /* --- Stage 7: kernel read/write --- */
     setStage('krw', 'running');
-    if (peResult && peResult.krw) {
+    if (peResult && peResult.krw && !peResult.stub) {
+      /* Only a real payload that actually read memory can claim this. */
       setStage('krw', 'ok');
       log('Kernel read/write primitive: ESTABLISHED', 'EXPLOIT');
-      log('KASLR slide: ' + peResult.slide, 'INFO');
-      log('Kernel base: ' + peResult.base, 'INFO');
+      if (peResult.slide) log('KASLR slide: ' + peResult.slide, 'INFO');
+      if (peResult.base)  log('Kernel base: ' + peResult.base, 'INFO');
       setVerdict(
-        'Device is VULNERABLE — full chain reached kernel r/w.\n' +
-        'iOS ' + (iosVer ? iosVer.join('.') : 'unknown') + ' / ' + arch,
+        'VULNERABLE — real payload returned a kernel r/w primitive.\n' +
+        'Kernel base: ' + (peResult.base || 'n/a'),
         'vulnerable'
+      );
+    } else if (peResult && peResult.stub) {
+      setStage('krw', 'stub');
+      log('SCAFFOLD — no payload loaded, no kernel r/w claimed', 'NOTE');
+      setVerdict(
+        'INCONCLUSIVE — scaffold-only run.\n' +
+        'Every stage executed its placeholder. No real exploit code ran, so no ' +
+        'conclusion about this device is possible from this run.\n' +
+        'Paste the leaked payloads into the marked regions to make the test meaningful.',
+        'inconclusive'
       );
     } else {
       setStage('krw', 'fail');
       log('Kernel r/w primitive not established', 'FAIL');
-      setVerdict('Chain reached PE stage but did not confirm kernel r/w', 'unknown');
+      setVerdict(
+        'INCONCLUSIVE — kernel stage completed without a kernel r/w result.\n' +
+        'The chain reached the end of the scaffold but produced no verifiable ' +
+        'read from kernel memory. This is not evidence the device is patched.',
+        'inconclusive'
+      );
     }
 
     finish();
@@ -609,16 +685,17 @@ self.onmessage = function (e) {
   }
 
   document.getElementById('btn-run').addEventListener('click', function () {
-    // allow manual re-run; clear first
     running = false;
     runChain();
   });
 
   /* ============================================================
    * FIRE ON LOAD — no pre-check, no gate.
-   * The device is the gate. If it's patched, the chain stalls at
-   * the first primitive that fails. If it's vulnerable, it goes
-   * all the way. Just like a real delivery.
+   * The device is the gate. If the real payload is loaded and the
+   * device is patched, the chain stalls at the first primitive that
+   * fails. If the real payload is loaded and the device is
+   * vulnerable, the chain will likely crash Safari or respring
+   * before returning — which the harness records as evidence.
    * ============================================================ */
   setTimeout(runChain, 300);
 })();
